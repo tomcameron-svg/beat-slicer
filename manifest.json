@@ -1,0 +1,7 @@
+{
+    "name": "Beat Slicer",
+    "author": "Tom Cameron",
+    "entry": "dist/extension.js",
+    "version": "0.0.1",
+    "minimumApiVersion": "1.0.0"
+}

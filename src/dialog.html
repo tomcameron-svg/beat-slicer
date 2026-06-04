@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Beat Slicer</title>
+  <script>
+    const DATA = /*__WAVEFORM_DATA__*/null;
+
+    function findTransients(sensitivity) {
+      if (!DATA) return [];
+      const onsetStrength = DATA.onsetStrength;
+
+      let peakOnset = 1e-10;
+      for (const v of onsetStrength) if (v > peakOnset) peakOnset = v;
+
+      const t = (sensitivity - 1) / 99;
+      const threshold = peakOnset * Math.max(Math.pow(1 - t, 2), 0.02);
+      const minGapFrames = Math.ceil(50 / DATA.hopMs);
+      const transientSecs = [];
+      let lastPeakFrame = -minGapFrames;
+      for (let i = 1; i < onsetStrength.length - 1; i++) {
+        const val = onsetStrength[i];
+        if (
+          val > threshold &&
+          val >= (onsetStrength[i - 1] ?? 0) &&
+          val >= (onsetStrength[i + 1] ?? 0) &&
+          i - lastPeakFrame > minGapFrames
+        ) {
+          transientSecs.push(i * DATA.hopMs / 1000);
+          lastPeakFrame = i;
+        }
+      }
+      return transientSecs;
+    }
+
+    function applySnap(transientSecs, snapMode, grid) {
+      if (!DATA || snapMode === 'exact') return transientSecs;
+      const gridMap = { '1/4': 1, '1/8': 0.5, '1/16': 0.25, '1/32': 0.125 };
+      const gridBeats = gridMap[grid] ?? 0.25;
+      const secondsPerBeat = DATA.durationSeconds / DATA.clipDurationBeats;
+      const snapped = transientSecs.map(s => {
+        const beats = s / secondsPerBeat;
+        const snappedBeats = Math.round(beats / gridBeats) * gridBeats;
+        return snappedBeats * secondsPerBeat;
+      });
+      // Deduplicate (only needed for 'grid' mode where cuts move to grid positions)
+      if (snapMode === 'grid') {
+        const unique = [];
+        let prev = -Infinity;
+        for (const s of snapped.sort((a, b) => a - b)) {
+          if (s !== prev) { unique.push(s); prev = s; }
+        }
+        return unique;
+      }
+      // 'quantize': transient markers stay at exact positions (audio cut is exact)
+      return transientSecs;
+    }
+
+    function redraw() {
+      if (!DATA) return;
+      const canvas = document.getElementById('wf');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width;
+      const H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = '#222';
+      ctx.fillRect(0, 0, W, H);
+
+      // Draw waveform peaks (grey bars)
+      const peaks = DATA.peaks;
+      const midY = H / 2;
+      ctx.fillStyle = '#666';
+      for (let x = 0; x < W && x < peaks.length; x++) {
+        const peak = peaks[x] ?? 0;
+        const barH = Math.max(1, peak * H);
+        ctx.fillRect(x, midY - barH / 2, 1, barH);
+      }
+
+      // Get current settings
+      const sensitivity = parseInt(document.getElementById('sensitivity').value, 10);
+      const grid = document.querySelector('input[name="grid"]:checked').value;
+      const snapMode = document.querySelector('input[name="snap"]:checked').value;
+
+      let transients = findTransients(sensitivity);
+      transients = applySnap(transients, snapMode, grid);
+
+      // Draw transient markers (orange vertical lines)
+      ctx.strokeStyle = '#FFA500';
+      ctx.lineWidth = 1;
+      for (const t of transients) {
+        const x = Math.round((t / DATA.durationSeconds) * W);
+        if (x > 0 && x < W) {
+          ctx.beginPath();
+          ctx.moveTo(x + 0.5, 0);
+          ctx.lineTo(x + 0.5, H);
+          ctx.stroke();
+        }
+      }
+
+      // Update slice count
+      const sliceCountEl = document.getElementById('slice-count');
+      if (sliceCountEl) {
+        sliceCountEl.textContent = (transients.length + 1) + ' slices';
+      }
+    }
+
+    function sensitivityLabel(v) {
+      if (v <= 20) return 'Very Low';
+      if (v <= 40) return 'Low';
+      if (v <= 60) return 'Medium';
+      if (v <= 80) return 'High';
+      return 'Very High';
+    }
+
+    function onControlChange() {
+      const sensitivity = parseInt(document.getElementById('sensitivity').value, 10);
+      document.getElementById('sens-label').textContent = sensitivityLabel(sensitivity);
+      redraw();
+    }
+
+    window.addEventListener('load', function() {
+      if (DATA) {
+        // Set clip name
+        const clipNameEl = document.getElementById('clip-name');
+        if (clipNameEl) {
+          clipNameEl.textContent = DATA.clipName + (DATA.clipCount > 1 ? ' + ' + (DATA.clipCount - 1) + ' more' : '');
+        }
+        // Show waveform section
+        const wfSection = document.getElementById('waveform-section');
+        if (wfSection) {
+          wfSection.style.display = 'block';
+        }
+        redraw();
+      }
+    });
+
+    function doSendMessage(message) {
+      if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.live) {
+        window.webkit.messageHandlers.live.postMessage(message);
+      } else if (window.chrome && window.chrome.webview) {
+        window.chrome.webview.postMessage(message);
+      }
+    }
+
+    function closeWithResult(result) {
+      doSendMessage({ method: "close_and_send", params: [JSON.stringify(result)] });
+    }
+
+    function submit() {
+      const grid = document.querySelector('input[name="grid"]:checked').value;
+      const snap = document.querySelector('input[name="snap"]:checked').value;
+      const sensitivity = parseInt(document.getElementById('sensitivity').value, 10);
+      closeWithResult({ grid, snap, sensitivity, cancelled: false });
+    }
+
+    function cancel() {
+      closeWithResult({ cancelled: true });
+    }
+  </script>
+  <style>
+    :root {
+      --bg: #383838;
+      --panel: #4E4E4E;
+      --orange: #FFA500;
+      --orange-hover: #FF8C00;
+      --text: #FFFFFF;
+      --text-dim: #AAAAAA;
+      --border: #2C2C2C;
+      --input-bg: #2C2C2C;
+      --radio-bg: #333333;
+      --radio-selected: #555555;
+    }
+
+    * { -webkit-user-select: none; user-select: none; box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      background-color: var(--panel);
+      font-family: 'Lucida Grande', 'Lucida Sans Unicode', sans-serif;
+      color: var(--text);
+      font-size: 11px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .dialog {
+      width: 460px;
+      padding: 16px 20px;
+    }
+
+    .title {
+      font-size: 13px;
+      font-weight: bold;
+      margin-bottom: 14px;
+      color: var(--text);
+    }
+
+    /* Waveform section */
+    #waveform-section {
+      display: none;
+      margin-bottom: 12px;
+    }
+
+    .wf-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 4px;
+    }
+
+    .wf-clip-name {
+      font-size: 10px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 320px;
+    }
+
+    .wf-count {
+      font-size: 10px;
+      color: var(--orange);
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+
+    #wf {
+      display: block;
+      background: #222;
+      border-radius: 2px;
+      width: 428px;
+      height: 72px;
+    }
+
+    .wf-divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 12px 0;
+    }
+
+    .section {
+      margin-bottom: 13px;
+    }
+
+    .section-label {
+      font-size: 10px;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+    }
+
+    /* Radio button pill group */
+    .pill-group {
+      display: flex;
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+
+    .pill-group input[type="radio"] { display: none; }
+
+    .pill-group label {
+      flex: 1;
+      text-align: center;
+      padding: 5px 0;
+      background: var(--radio-bg);
+      color: var(--text-dim);
+      cursor: pointer;
+      border-right: 1px solid var(--border);
+      font-size: 11px;
+      transition: background 0.1s, color 0.1s;
+    }
+
+    .pill-group label:last-of-type { border-right: none; }
+
+    .pill-group input[type="radio"]:checked + label {
+      background: var(--radio-selected);
+      color: var(--text);
+    }
+
+    /* Sensitivity slider */
+    .sens-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .sens-row input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      flex: 1;
+      height: 3px;
+      background: var(--input-bg);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .sens-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: var(--orange);
+      cursor: pointer;
+    }
+
+    .sens-ends {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-dim);
+      font-size: 10px;
+      margin-top: 4px;
+    }
+
+    .sens-value {
+      font-size: 11px;
+      color: var(--text);
+      min-width: 52px;
+      text-align: right;
+    }
+
+    /* Buttons */
+    .button-row {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 16px;
+    }
+
+    button {
+      padding: 6px 14px;
+      font-size: 11px;
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+      font-family: inherit;
+    }
+
+    button.primary {
+      background: var(--orange);
+      color: #000;
+    }
+
+    button.primary:hover { background: var(--orange-hover); }
+
+    button.secondary {
+      background: #555;
+      color: var(--text);
+    }
+
+    button.secondary:hover { background: #666; }
+
+    .divider {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 13px 0;
+    }
+  </style>
+</head>
+<body oncontextmenu="return false" ondragstart="return false">
+  <div class="dialog">
+    <div class="title">Beat Slicer</div>
+
+    <div id="waveform-section">
+      <div class="wf-header">
+        <span class="wf-clip-name" id="clip-name"></span>
+        <span class="wf-count" id="slice-count"></span>
+      </div>
+      <canvas id="wf" width="428" height="72"></canvas>
+      <hr class="wf-divider">
+    </div>
+
+    <div class="section">
+      <div class="section-label">Grid Resolution</div>
+      <div class="pill-group">
+        <input type="radio" name="grid" id="g1" value="1/4" onchange="onControlChange()">
+        <label for="g1">1/4</label>
+        <input type="radio" name="grid" id="g2" value="1/8" onchange="onControlChange()">
+        <label for="g2">1/8</label>
+        <input type="radio" name="grid" id="g3" value="1/16" checked onchange="onControlChange()">
+        <label for="g3">1/16</label>
+        <input type="radio" name="grid" id="g4" value="1/32" onchange="onControlChange()">
+        <label for="g4">1/32</label>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-label">Slice Style</div>
+      <div class="pill-group">
+        <input type="radio" name="snap" id="snap-exact" value="exact" checked onchange="onControlChange()">
+        <label for="snap-exact">Slice Exact Transients</label>
+        <input type="radio" name="snap" id="snap-grid" value="grid" onchange="onControlChange()">
+        <label for="snap-grid">Nearest Grid Positions</label>
+        <input type="radio" name="snap" id="snap-quantize" value="quantize" onchange="onControlChange()">
+        <label for="snap-quantize">Snap Transients to Grid</label>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <div class="section">
+      <div class="section-label">Detection Sensitivity</div>
+      <div class="sens-row">
+        <input type="range" id="sensitivity" min="1" max="100" value="40"
+               oninput="onControlChange()">
+        <span class="sens-value" id="sens-label">Medium</span>
+      </div>
+      <div class="sens-ends">
+        <span>Very Low</span>
+        <span>Very High</span>
+      </div>
+    </div>
+
+    <div class="button-row">
+      <button class="secondary" onclick="cancel()">Cancel</button>
+      <button class="primary" onclick="submit()">Slice</button>
+    </div>
+  </div>
+</body>
+</html>
