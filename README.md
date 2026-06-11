@@ -1,6 +1,6 @@
 # Beat Slicer
 
-An [Ableton Live Extension](https://www.ableton.com/en/packs/extensions/) that automatically slices audio clips at detected transients. Right-click any audio clip in Arrangement View to slice it into individual hits.
+An [Ableton Live Extension](https://www.ableton.com/en/live/extensions/) that automatically slices audio clips at detected transients. Right-click any audio clip in Arrangement View to slice it into individual hits.
 
 ## Features
 
@@ -25,7 +25,7 @@ Requires Ableton Live 12.1+ with Extensions support.
 ### Prerequisites
 
 - [Node.js](https://nodejs.org) 18+
-- Ableton Extensions SDK (download from the [Ableton Developer Portal](https://www.ableton.com/en/developer/))
+- Ableton Extensions SDK (download from [Ableton](https://www.ableton.com/en/live/extensions/))
 
 ### Setup
 
@@ -75,8 +75,6 @@ node ../extensions-sdk/package.cjs . -o beat-slicer.ablx
 ## Contributing
 
 Pull requests are welcome. The extension is a single TypeScript file ([src/extension.ts](src/extension.ts)) plus a self-contained HTML dialog ([src/dialog.html](src/dialog.html)).
-
-Please open an issue before starting significant work so we can discuss the approach.
 
 ## License
 
