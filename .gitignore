@@ -1,5 +1,7 @@
 node_modules/
 dist/
 *.map
-.DS_Store
 *.ablx
+.DS_Store
+.env
+package-lock.json
